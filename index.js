@@ -86,7 +86,7 @@ async function run() {
             res.send({ admin: isAdmin })
         })
 
-        // -------------------- MAKE ADMIN 
+        // -------------------- MAKE ADMIN
         app.put('/users/admin/:email', verifyJWT, async (req, res) => {
             const email = req.params.email;
             const requestUserEmail = req.decoded.email;
