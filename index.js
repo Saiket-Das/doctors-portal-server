@@ -1,4 +1,4 @@
-const { MongoClient, ServerApiVersion, Admin } = require('mongodb');
+const { MongoClient, ServerApiVersion, Admin, ObjectId } = require('mongodb');
 
 const express = require('express');
 var nodemailer = require('nodemailer');
@@ -8,6 +8,10 @@ const app = express();
 const port = process.env.PORT || 5000;
 require('dotenv').config();
 var jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+app.use(express.static("public"));
+app.use(express.json());
 
 
 // Middleware 
@@ -81,6 +85,39 @@ function sendAppointmentEmail(booking) {
 }
 
 
+// -------------------- SEND PAYMENT CONFIRMATION EMAIL THEOUGH SEND GRID  
+function sendPaymentConfirmationEmail(booking) {
+    const { treatment, date, slot, patientEmail, patientName } = booking;
+    var email = {
+        from: process.env.EMAIL_FROM,
+        to: patientEmail,
+        subject: `We have received yout payment for ${treatment}.`,
+        text: `We have received yout payment for ${treatment}.`,
+        html: `
+        <div> 
+        <h3>Hello ${patientName},</h3>
+        <p>Thank you for your payment. We have received yout payment for ${treatment}.</p>
+        <p>Looking forward to seeing on ${date} at ${slot}</p>
+        <p>Paitent name: ${patientName}</p>
+        <p>Address: Jalan SS 7/26, Kelana Jaya, 47301, Selangor
+        </p>
+        <a href="https://www.facebook.com/ahan.bryan.96/">Unsubscribe</a>
+        </div>
+        `
+    };
+
+    emailClient.sendMail(email, function (err, info) {
+        if (err) {
+            console.log(err);
+        }
+        else {
+            console.log('Message sent');
+        }
+    });
+
+}
+
+
 async function run() {
     try {
         await client.connect();
@@ -88,6 +125,7 @@ async function run() {
         const bookingCollection = client.db('dorctors_portal').collection('booking');
         const usersCollection = client.db('dorctors_portal').collection('users');
         const doctorsCollection = client.db('dorctors_portal').collection('doctors');
+        const paymentsCollection = client.db('dorctors_portal').collection('payments');
 
 
         const verifyAdmin = async (req, res, next) => {
@@ -165,9 +203,8 @@ async function run() {
 
 
 
+
         // -------------------- DOCTOR --------------------
-
-
 
         // -------------------- GET ALL DOCTORS 
         app.get('/doctor', verifyJWT, verifyAdmin, async (req, res) => {
@@ -189,6 +226,7 @@ async function run() {
             const deleteDelete = await doctorsCollection.deleteOne(query);
             res.send(deleteDelete);
         })
+
 
 
 
@@ -220,7 +258,7 @@ async function run() {
 
         // -------------------- BOOKING --------------------
 
-        // -------------------- GET ALL THE BOOKING SLOT FROM SPECIFIC USER 
+        // -------------------- GET ALL THE BOOKING SLOT FROM SPECIFIC USER by EMAIL 
         app.get('/booking', verifyJWT, async (req, res) => {
             const patientEmail = req.query.patientEmail;
             const decodedEmail = req.decoded.email;
@@ -235,6 +273,29 @@ async function run() {
             }
         })
 
+        app.get('/booking/:id', async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: ObjectId(id) }
+            const booking = await bookingCollection.findOne(query);
+            res.send(booking)
+        })
+
+        app.patch('/booking/:id', async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: ObjectId(id) };
+            const payment = req.body;
+            const updateDoc = {
+                $set: {
+                    paid: true,
+                    transactionId: payment.transactionId,
+                }
+            }
+            const updatedBooking = await bookingCollection.updateOne(filter, updateDoc);
+            const result = await paymentsCollection.insertOne(payment);
+            res.send(updatedBooking)
+        })
+
+
         // -------------------- ADD NEW BOOKING SLOT TO THE BOOKING API 
         app.post('/booking', async (req, res) => {
             const booking = req.body;
@@ -247,6 +308,24 @@ async function run() {
             sendAppointmentEmail(booking);
             res.send({ success: true, result })
         })
+
+
+
+        // -------------------- PAYMENT --------------------
+
+        // -------------------- PAYMNET INTENT API 
+        app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+            const service = req.body;
+            const price = service.price;
+            const amount = price * 100;
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ['card']
+            });
+            res.send({ clientSecret: paymentIntent.client_secret })
+        });
 
     }
 
